@@ -6,7 +6,8 @@
     "dev:api": "node --loader ts-node/esm api/dev-server.ts",
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
