@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react'
-import Tesseract from 'tesseract.js'
+import { createWorker } from 'tesseract.js'
 
 type OcrResult = {
   rawText: string
@@ -22,19 +22,28 @@ export default function OcrProcessor({ imageFile, onComplete }: Props) {
     setProgress(0)
     setErrorMsg(null)
 
+    let worker
     try {
-      const result = await Tesseract.recognize(imageFile, 'jpn+eng', {
+      worker = await createWorker(['jpn', 'eng'], 1, {
+        workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/worker.min.js',
+        langPath: 'https://tessdata.projectnaptha.com/4.0.0',
+        corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.1/tesseract-core-simd-lstm.wasm.js',
         logger: (m: { status: string; progress: number }) => {
           if (m.status === 'recognizing text') {
             setProgress(Math.round(m.progress * 100))
+          } else if (m.status === 'loading language traineddata') {
+            setProgress(Math.round(m.progress * 30))
           }
         },
       })
+      const { data } = await worker.recognize(imageFile)
       setStatus('done')
-      onComplete({ rawText: result.data.text.trim(), confidence: result.data.confidence })
+      onComplete({ rawText: data.text.trim(), confidence: data.confidence })
     } catch (e) {
       setStatus('error')
       setErrorMsg(String(e))
+    } finally {
+      if (worker) await worker.terminate()
     }
   }, [imageFile, onComplete])
 
@@ -64,7 +73,7 @@ export default function OcrProcessor({ imageFile, onComplete }: Props) {
             style={{ width: `${progress}%` }}
           />
         </div>
-        <p className="text-xs text-blue-600">初回は言語データのダウンロードに時間がかかります</p>
+        <p className="text-xs text-blue-600">初回は言語データのダウンロードに時間がかかります（1〜2分）</p>
       </div>
     )
   }
