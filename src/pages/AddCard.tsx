@@ -20,10 +20,49 @@ function parseOcrText(text: string): Partial<CardInput> {
     if (!result.website && /https?:\/\//.test(line)) {
       result.website = line.match(/https?:\/\/[^\s]+/)?.[0]
     }
-    if (!result.phone && /[\d\-（）()]{10,}/.test(line) && !result.email) {
-      result.phone = line.trim()
+    const postalMatch = line.match(/〒?\s*(\d{3}[-ー]\d{4})/)
+    if (!result.postalCode && postalMatch) {
+      result.postalCode = postalMatch[1]
+    }
+    if (!result.address && /[都道府県市区町村]/.test(line)) {
+      result.address = line
+    }
+    const phoneMatch = line.match(/(0\d{1,4}[-ー（）()\s]?\d{1,4}[-ー（）()\s]?\d{4})/)
+    if (phoneMatch) {
+      const num = phoneMatch[1]
+      if (!result.phone && !/携帯|mobile|cell/i.test(line)) result.phone = num
+      else if (!result.mobile) result.mobile = num
+    }
+    if (!result.fax && /fax|ファックス|ＦＡＸ/i.test(line)) {
+      const faxNum = line.match(/(0\d{1,4}[-ー（）()\s]?\d{1,4}[-ー（）()\s]?\d{4})/)
+      if (faxNum) result.fax = faxNum[1]
+    }
+    if (!result.company && /(株式会社|有限会社|合同会社|㈱|㈲|Corp|Inc|Ltd|LLC)/i.test(line)) {
+      result.company = line
+    }
+    if (!result.department && /(部|課|室|グループ|チーム|本部|事業部)$/.test(line)) {
+      result.department = line
+    }
+    if (!result.title && /(長|役員|部長|課長|主任|マネージャー|ディレクター|代表|社長|取締役|執行役員|CEO|CTO|CFO)/i.test(line)) {
+      result.title = line
     }
   }
+
+  // 名前候補: 短くてひらがな/カタカナ/漢字のみの行
+  if (!result.name) {
+    for (const line of lines) {
+      if (
+        line.length >= 2 && line.length <= 12 &&
+        /^[　-鿿＀-￯\s　]+$/.test(line) &&
+        !result.company?.includes(line) &&
+        !/[0-9０-９\-－]/.test(line)
+      ) {
+        result.name = line
+        break
+      }
+    }
+  }
+
   return result
 }
 
@@ -134,6 +173,12 @@ export default function AddCard() {
           <h2 className="text-lg font-bold">名刺情報の確認・編集</h2>
           {imagePreview && (
             <img src={imagePreview} alt="名刺" className="w-full rounded-xl max-h-48 object-contain bg-gray-100" />
+          )}
+          {ocrData.rawOcrText && (
+            <details className="bg-gray-50 rounded-xl border border-gray-200">
+              <summary className="px-4 py-2 text-sm text-gray-500 cursor-pointer select-none">OCR生テキストを表示（参照用）</summary>
+              <pre className="px-4 pb-3 text-xs text-gray-600 whitespace-pre-wrap break-all">{ocrData.rawOcrText}</pre>
+            </details>
           )}
           <CardForm initialData={ocrData} onSubmit={handleSave} submitLabel="名刺を登録" loading={saving} />
         </>
