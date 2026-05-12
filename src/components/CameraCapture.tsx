@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback } from 'react'
+import { useRef, useState, useCallback, useEffect } from 'react'
 import { Camera, Upload, X } from 'lucide-react'
 
 type Props = {
@@ -20,15 +20,19 @@ export default function CameraCapture({ onCapture }: Props) {
     onCapture(file, url)
   }
 
+  useEffect(() => {
+    if (mode === 'camera' && videoRef.current && streamRef.current) {
+      videoRef.current.srcObject = streamRef.current
+      videoRef.current.play().catch(() => {})
+    }
+  }, [mode])
+
   const startCamera = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'environment', width: { ideal: 1920 } },
       })
       streamRef.current = stream
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-      }
       setMode('camera')
     } catch {
       fileInputRef.current?.click()
@@ -60,7 +64,7 @@ export default function CameraCapture({ onCapture }: Props) {
   if (mode === 'camera') {
     return (
       <div className="space-y-3">
-        <video ref={videoRef} autoPlay playsInline className="w-full rounded-xl bg-black" />
+        <video ref={videoRef} autoPlay playsInline muted className="w-full rounded-xl bg-black" />
         <div className="flex gap-3">
           <button
             type="button"
