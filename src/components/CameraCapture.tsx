@@ -1,5 +1,6 @@
 import { useRef, useState, useCallback, useEffect } from 'react'
 import { Camera, Upload, X } from 'lucide-react'
+import { enhanceCardImage } from '../lib/imageEnhance'
 
 type Props = {
   onCapture: (file: File, previewUrl: string) => void
@@ -12,12 +13,13 @@ export default function CameraCapture({ onCapture }: Props) {
   const [preview, setPreview] = useState<string | null>(null)
   const [mode, setMode] = useState<'select' | 'camera'>('select')
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    const url = URL.createObjectURL(file)
+    const enhanced = await enhanceCardImage(file).catch(() => file)
+    const url = URL.createObjectURL(enhanced)
     setPreview(url)
-    onCapture(file, url)
+    onCapture(enhanced, url)
   }
 
   useEffect(() => {
@@ -51,13 +53,14 @@ export default function CameraCapture({ onCapture }: Props) {
     canvas.width = videoRef.current.videoWidth
     canvas.height = videoRef.current.videoHeight
     canvas.getContext('2d')?.drawImage(videoRef.current, 0, 0)
-    canvas.toBlob((blob) => {
+    canvas.toBlob(async (blob) => {
       if (!blob) return
-      const file = new File([blob], `capture_${Date.now()}.jpg`, { type: 'image/jpeg' })
-      const url = URL.createObjectURL(blob)
+      const raw = new File([blob], `capture_${Date.now()}.jpg`, { type: 'image/jpeg' })
+      const enhanced = await enhanceCardImage(raw).catch(() => raw)
+      const url = URL.createObjectURL(enhanced)
       setPreview(url)
       stopCamera()
-      onCapture(file, url)
+      onCapture(enhanced, url)
     }, 'image/jpeg', 0.92)
   }, [stopCamera, onCapture])
 
