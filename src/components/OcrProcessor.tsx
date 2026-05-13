@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react'
-import { createWorker } from 'tesseract.js'
+import { apiClient } from '../lib/api'
 
 type OcrResult = {
   rawText: string
@@ -12,38 +12,26 @@ type Props = {
 }
 
 export default function OcrProcessor({ imageFile, onComplete }: Props) {
-  const [progress, setProgress] = useState(0)
   const [status, setStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
   const runOcr = useCallback(async () => {
     if (!imageFile) return
     setStatus('running')
-    setProgress(0)
     setErrorMsg(null)
 
-    let worker
     try {
-      worker = await createWorker(['jpn', 'eng'], 1, {
-        workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/worker.min.js',
-        langPath: 'https://tessdata.projectnaptha.com/4.0.0',
-        corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.1/tesseract-core-simd-lstm.wasm.js',
-        logger: (m: { status: string; progress: number }) => {
-          if (m.status === 'recognizing text') {
-            setProgress(Math.round(m.progress * 100))
-          } else if (m.status === 'loading language traineddata') {
-            setProgress(Math.round(m.progress * 30))
-          }
+      const res = await apiClient.post<{ text: string }>('/ocr', imageFile, {
+        headers: {
+          'Content-Type': imageFile.type,
+          'x-filename': encodeURIComponent(imageFile.name),
         },
       })
-      const { data } = await worker.recognize(imageFile)
       setStatus('done')
-      onComplete({ rawText: data.text.trim(), confidence: data.confidence })
+      onComplete({ rawText: res.data.text.trim(), confidence: 90 })
     } catch (e) {
       setStatus('error')
       setErrorMsg(String(e))
-    } finally {
-      if (worker) await worker.terminate()
     }
   }, [imageFile, onComplete])
 
@@ -63,17 +51,11 @@ export default function OcrProcessor({ imageFile, onComplete }: Props) {
   if (status === 'running') {
     return (
       <div className="space-y-2 p-4 bg-blue-50 rounded-xl">
-        <div className="flex justify-between text-sm text-blue-700">
+        <div className="flex items-center gap-3 text-sm text-blue-700">
+          <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
           <span>OCR処理中...</span>
-          <span>{progress}%</span>
         </div>
-        <div className="w-full bg-blue-200 rounded-full h-2">
-          <div
-            className="bg-primary-600 h-2 rounded-full transition-all"
-            style={{ width: `${progress}%` }}
-          />
-        </div>
-        <p className="text-xs text-blue-600">初回は言語データのダウンロードに時間がかかります（1〜2分）</p>
+        <p className="text-xs text-blue-600">クラウドOCRで解析しています（数秒）</p>
       </div>
     )
   }
