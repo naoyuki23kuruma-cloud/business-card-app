@@ -5,6 +5,8 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
   max: 1,
+  connectionTimeoutMillis: 10000,
+  idleTimeoutMillis: 30000,
 })
 
 function deserializeCard(row: Record<string, unknown>) {
@@ -59,7 +61,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     res.status(405).end()
   } catch (err) {
-    console.error(err)
-    res.status(500).json({ error: String(err) })
+    console.error('cards/[id] API error:', err)
+    const detail = err instanceof Error ? err.message : String(err)
+    res.status(500).json({ error: detail })
   }
 }

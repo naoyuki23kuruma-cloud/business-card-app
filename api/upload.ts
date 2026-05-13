@@ -5,6 +5,15 @@ export const config = {
   api: { bodyParser: false },
 }
 
+function readBuffer(req: VercelRequest): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []
+    req.on('data', (chunk: Buffer) => chunks.push(chunk))
+    req.on('end', () => resolve(Buffer.concat(chunks)))
+    req.on('error', reject)
+  })
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
@@ -20,7 +29,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       : `card_${Date.now()}.jpg`
     const contentType = (req.headers['content-type'] as string) || 'image/jpeg'
 
-    const blob = await put(`cards/${filename}`, req, {
+    // リクエストボディをバッファに読み込んでからアップロード
+    const buffer = await readBuffer(req)
+    if (buffer.length === 0) {
+      return res.status(400).json({ error: 'ファイルが空です' })
+    }
+
+    const blob = await put(`cards/${filename}`, buffer, {
       access: 'public',
       contentType,
     })
@@ -30,7 +45,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       thumbnailUrl: blob.url,
     })
   } catch (err) {
-    console.error(err)
+    console.error('upload error:', err)
     res.status(500).json({ error: String(err) })
   }
 }

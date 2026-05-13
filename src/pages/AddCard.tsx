@@ -96,20 +96,31 @@ export default function AddCard() {
       let thumbnailUrl: string | null = null
 
       if (imageFile) {
-        const urls = await uploadApi.uploadImage(imageFile)
-        imageUrl = urls.imageUrl
-        thumbnailUrl = urls.thumbnailUrl
+        try {
+          const urls = await uploadApi.uploadImage(imageFile)
+          imageUrl = urls.imageUrl
+          thumbnailUrl = urls.thumbnailUrl
+        } catch (uploadErr: unknown) {
+          const msg = (uploadErr as { response?: { data?: { error?: string } } })?.response?.data?.error
+            || (uploadErr instanceof Error ? uploadErr.message : String(uploadErr))
+          // 画像アップロード失敗でも登録は続行（画像なしで保存）
+          console.warn('画像アップロード失敗:', msg)
+        }
       }
 
-      const card = await addCard({
-        ...ocrData,
-        ...formData,
-        imageUrl,
-        thumbnailUrl,
-      })
-      navigate(`/cards/${card.id}`)
-    } catch (e) {
-      alert('保存に失敗しました: ' + String(e))
+      try {
+        const card = await addCard({
+          ...ocrData,
+          ...formData,
+          imageUrl,
+          thumbnailUrl,
+        })
+        navigate(`/cards/${card.id}`)
+      } catch (saveErr: unknown) {
+        const msg = (saveErr as { response?: { data?: { error?: string } } })?.response?.data?.error
+          || (saveErr instanceof Error ? saveErr.message : String(saveErr))
+        alert('名刺の保存に失敗しました:\n' + msg + '\n\n※ブラウザで /api/setup にアクセスして初期設定を試してください')
+      }
     } finally {
       setSaving(false)
     }

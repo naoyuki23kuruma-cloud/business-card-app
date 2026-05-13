@@ -6,8 +6,8 @@ export async function enhanceCardImage(file: File): Promise<File> {
       URL.revokeObjectURL(url)
       try {
         const canvas = document.createElement('canvas')
-        // 長辺を最大2000pxに制限（高品質維持）
-        const maxSize = 2000
+        // 長辺を最大2400pxに制限
+        const maxSize = 2400
         const scale = Math.min(1, maxSize / Math.max(img.width, img.height))
         canvas.width = Math.round(img.width * scale)
         canvas.height = Math.round(img.height * scale)
@@ -16,50 +16,60 @@ export async function enhanceCardImage(file: File): Promise<File> {
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
         const data = imageData.data
+        const len = data.length
 
-        // オートレベル: チャンネルごとにmin/maxを求めて伸張
-        let rMin = 255, rMax = 0, gMin = 255, gMax = 0, bMin = 255, bMax = 0
-        for (let i = 0; i < data.length; i += 4) {
-          if (data[i] < rMin) rMin = data[i]
-          if (data[i] > rMax) rMax = data[i]
-          if (data[i + 1] < gMin) gMin = data[i + 1]
-          if (data[i + 1] > gMax) gMax = data[i + 1]
-          if (data[i + 2] < bMin) bMin = data[i + 2]
-          if (data[i + 2] > bMax) bMax = data[i + 2]
+        // ---- Step 1: グレースケール変換（名刺のスキャン風）----
+        for (let i = 0; i < len; i += 4) {
+          const gray = Math.round(data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114)
+          data[i] = gray
+          data[i + 1] = gray
+          data[i + 2] = gray
         }
 
-        const rRange = rMax - rMin || 1
-        const gRange = gMax - gMin || 1
-        const bRange = bMax - bMin || 1
+        // ---- Step 2: ヒストグラム計算（上位2%・下位2%をクリップ）----
+        const hist = new Uint32Array(256)
+        for (let i = 0; i < len; i += 4) hist[data[i]]++
+        const pixelCount = (len / 4) * 0.02 // 2%クリップ
+        let low = 0, high = 255, acc = 0
+        for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= pixelCount) { low = v; break } }
+        acc = 0
+        for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc >= pixelCount) { high = v; break } }
+        const range = high - low || 1
 
-        // コントラスト強調 + 明るさ補正
-        for (let i = 0; i < data.length; i += 4) {
-          data[i]     = Math.round(((data[i]     - rMin) / rRange) * 255)
-          data[i + 1] = Math.round(((data[i + 1] - gMin) / gRange) * 255)
-          data[i + 2] = Math.round(((data[i + 2] - bMin) / bRange) * 255)
+        // ---- Step 3: コントラスト伸張 + ガンマ補正（背景を白く、文字を黒く）----
+        const gamma = 0.7 // < 1 で中間調を明るく（背景を白く飛ばす）
+        const lut = new Uint8Array(256)
+        for (let v = 0; v < 256; v++) {
+          const norm = Math.max(0, Math.min(1, (v - low) / range))
+          lut[v] = Math.round(Math.pow(norm, gamma) * 255)
+        }
+        for (let i = 0; i < len; i += 4) {
+          data[i] = lut[data[i]]
+          data[i + 1] = lut[data[i + 1]]
+          data[i + 2] = lut[data[i + 2]]
         }
 
-        // シャープネス（アンシャープマスク）
-        const sharp = new ImageData(new Uint8ClampedArray(data), canvas.width, canvas.height)
+        // ---- Step 4: アンシャープマスク（シャープネス強化）----
         const src = new Uint8ClampedArray(data)
         const w = canvas.width
         const h = canvas.height
-        const amount = 0.6
+        const amount = 1.2 // シャープネス強度（前: 0.6）
         for (let y = 1; y < h - 1; y++) {
           for (let x = 1; x < w - 1; x++) {
             const idx = (y * w + x) * 4
-            for (let c = 0; c < 3; c++) {
-              const blur = (
-                src[idx - w * 4 - 4 + c] + src[idx - w * 4 + c] + src[idx - w * 4 + 4 + c] +
-                src[idx - 4 + c]         + src[idx + c]          + src[idx + 4 + c] +
-                src[idx + w * 4 - 4 + c] + src[idx + w * 4 + c] + src[idx + w * 4 + 4 + c]
-              ) / 9
-              sharp.data[idx + c] = Math.max(0, Math.min(255, src[idx + c] + amount * (src[idx + c] - blur)))
-            }
+            const blur = (
+              src[idx - w * 4 - 4] + src[idx - w * 4] + src[idx - w * 4 + 4] +
+              src[idx - 4]         + src[idx]          + src[idx + 4] +
+              src[idx + w * 4 - 4] + src[idx + w * 4] + src[idx + w * 4 + 4]
+            ) / 9
+            const sharp = Math.max(0, Math.min(255, src[idx] + amount * (src[idx] - blur)))
+            data[idx] = sharp
+            data[idx + 1] = sharp
+            data[idx + 2] = sharp
           }
         }
 
-        ctx.putImageData(sharp, 0, 0)
+        ctx.putImageData(new ImageData(data, canvas.width, canvas.height), 0, 0)
 
         canvas.toBlob(
           (blob) => {
