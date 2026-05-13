@@ -1,6 +1,12 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import pool from '../lib/db'
+import { Pool } from 'pg'
 import { v4 as uuidv4 } from 'uuid'
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+  max: 1,
+})
 
 function qs(val: unknown): string {
   return typeof val === 'string' ? val : ''
@@ -31,31 +37,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const params: unknown[] = []
       let idx = 1
 
-      if (favoriteOnly) {
-        conditions.push(`"isFavorite" = true`)
-      }
-      if (tag) {
-        conditions.push(`tags ILIKE $${idx++}`)
-        params.push(`%${tag}%`)
-      }
+      if (favoriteOnly) conditions.push(`"isFavorite" = true`)
+      if (tag) { conditions.push(`tags ILIKE $${idx++}`); params.push(`%${tag}%`) }
       if (q) {
-        const searchFields = ['name', 'company', 'department', 'title', 'email', 'phone', 'mobile', 'address', 'memo', '"rawOcrText"', 'tags', '"nameKana"']
-        const orClauses = searchFields.map(f => `${f} ILIKE $${idx}`).join(' OR ')
-        conditions.push(`(${orClauses})`)
-        params.push(`%${q}%`)
-        idx++
+        const fields = ['name','company','department','title','email','phone','mobile','address','memo','"rawOcrText"','tags','"nameKana"']
+        conditions.push(`(${fields.map(f => `${f} ILIKE $${idx}`).join(' OR ')})`)
+        params.push(`%${q}%`); idx++
       }
 
       const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
-
       const countResult = await pool.query(`SELECT COUNT(*) FROM cards ${where}`, params)
       const total = parseInt(countResult.rows[0].count, 10)
-
       const dataResult = await pool.query(
         `SELECT * FROM cards ${where} ORDER BY "createdAt" DESC LIMIT $${idx} OFFSET $${idx + 1}`,
         [...params, limit, offset]
       )
-
       return res.json({
         cards: dataResult.rows.map(deserializeCard),
         pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
@@ -67,25 +63,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const id = uuidv4()
       const now = new Date()
       const tags = Array.isArray(b.tags) ? JSON.stringify(b.tags) : (b.tags ?? '[]')
-
       const result = await pool.query(
         `INSERT INTO cards (
-          id, "imageUrl", "thumbnailUrl", "rawOcrText", name, "nameKana", company, department,
-          title, email, phone, mobile, fax, address, "postalCode", website,
-          "exchangeDate", "exchangeLocation", memo, tags, "isFavorite", "createdAt", "updatedAt"
-        ) VALUES (
-          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23
-        ) RETURNING *`,
-        [
-          id,
-          b.imageUrl ?? null, b.thumbnailUrl ?? null, b.rawOcrText ?? null,
-          b.name ?? null, b.nameKana ?? null, b.company ?? null, b.department ?? null,
-          b.title ?? null, b.email ?? null, b.phone ?? null, b.mobile ?? null,
-          b.fax ?? null, b.address ?? null, b.postalCode ?? null, b.website ?? null,
-          b.exchangeDate ? new Date(b.exchangeDate as string) : null,
-          b.exchangeLocation ?? null, b.memo ?? null,
-          tags, b.isFavorite ?? false, now, now,
-        ]
+          id,"imageUrl","thumbnailUrl","rawOcrText",name,"nameKana",company,department,
+          title,email,phone,mobile,fax,address,"postalCode",website,
+          "exchangeDate","exchangeLocation",memo,tags,"isFavorite","createdAt","updatedAt"
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23) RETURNING *`,
+        [id, b.imageUrl??null, b.thumbnailUrl??null, b.rawOcrText??null,
+         b.name??null, b.nameKana??null, b.company??null, b.department??null,
+         b.title??null, b.email??null, b.phone??null, b.mobile??null,
+         b.fax??null, b.address??null, b.postalCode??null, b.website??null,
+         b.exchangeDate ? new Date(b.exchangeDate as string) : null,
+         b.exchangeLocation??null, b.memo??null, tags, b.isFavorite??false, now, now]
       )
       return res.status(201).json(deserializeCard(result.rows[0]))
     }
