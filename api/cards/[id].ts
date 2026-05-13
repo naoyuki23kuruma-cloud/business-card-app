@@ -1,60 +1,10 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { prisma } from '../../lib/prisma'
-import { Prisma } from '@prisma/client'
+import pool from '../../lib/db'
 
-type CardInput = {
-  tags?: string[] | string
-  exchangeDate?: string | null
-  imageUrl?: string | null
-  thumbnailUrl?: string | null
-  rawOcrText?: string | null
-  name?: string | null
-  nameKana?: string | null
-  company?: string | null
-  department?: string | null
-  title?: string | null
-  email?: string | null
-  phone?: string | null
-  mobile?: string | null
-  fax?: string | null
-  address?: string | null
-  postalCode?: string | null
-  website?: string | null
-  exchangeLocation?: string | null
-  memo?: string | null
-  isFavorite?: boolean
-}
-
-function serializeCard(body: CardInput): Prisma.CardUpdateInput {
-  const tagsStr = Array.isArray(body.tags) ? JSON.stringify(body.tags) : (body.tags ?? '[]')
-  return {
-    imageUrl: body.imageUrl ?? undefined,
-    thumbnailUrl: body.thumbnailUrl ?? undefined,
-    rawOcrText: body.rawOcrText ?? undefined,
-    name: body.name ?? undefined,
-    nameKana: body.nameKana ?? undefined,
-    company: body.company ?? undefined,
-    department: body.department ?? undefined,
-    title: body.title ?? undefined,
-    email: body.email ?? undefined,
-    phone: body.phone ?? undefined,
-    mobile: body.mobile ?? undefined,
-    fax: body.fax ?? undefined,
-    address: body.address ?? undefined,
-    postalCode: body.postalCode ?? undefined,
-    website: body.website ?? undefined,
-    exchangeDate: body.exchangeDate ? new Date(body.exchangeDate) : null,
-    exchangeLocation: body.exchangeLocation ?? undefined,
-    memo: body.memo ?? undefined,
-    tags: tagsStr,
-    isFavorite: body.isFavorite,
-  }
-}
-
-function deserializeCard(card: { tags: string; [key: string]: unknown }) {
-  let parsedTags: string[] = []
-  try { parsedTags = JSON.parse(card.tags) as string[] } catch { parsedTags = [] }
-  return { ...card, tags: parsedTags }
+function deserializeCard(row: Record<string, unknown>) {
+  let tags: string[] = []
+  try { tags = JSON.parse(row.tags as string) } catch { tags = [] }
+  return { ...row, tags }
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -68,22 +18,40 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     if (req.method === 'GET') {
-      const card = await prisma.card.findUnique({ where: { id } })
-      if (!card) return res.status(404).json({ error: '名刺が見つかりません' })
-      return res.json(deserializeCard(card))
+      const result = await pool.query('SELECT * FROM cards WHERE id = $1', [id])
+      if (result.rows.length === 0) return res.status(404).json({ error: '名刺が見つかりません' })
+      return res.json(deserializeCard(result.rows[0]))
     }
 
     if (req.method === 'PUT') {
-      const exists = await prisma.card.findUnique({ where: { id } })
-      if (!exists) return res.status(404).json({ error: '名刺が見つかりません' })
-      const card = await prisma.card.update({ where: { id }, data: serializeCard(req.body as CardInput) })
-      return res.json(deserializeCard(card))
+      const b = req.body as Record<string, unknown>
+      const tags = Array.isArray(b.tags) ? JSON.stringify(b.tags) : (b.tags ?? '[]')
+      const now = new Date()
+
+      const result = await pool.query(
+        `UPDATE cards SET
+          "imageUrl"=$1, "thumbnailUrl"=$2, "rawOcrText"=$3, name=$4, "nameKana"=$5,
+          company=$6, department=$7, title=$8, email=$9, phone=$10, mobile=$11,
+          fax=$12, address=$13, "postalCode"=$14, website=$15, "exchangeDate"=$16,
+          "exchangeLocation"=$17, memo=$18, tags=$19, "isFavorite"=$20, "updatedAt"=$21
+        WHERE id=$22 RETURNING *`,
+        [
+          b.imageUrl ?? null, b.thumbnailUrl ?? null, b.rawOcrText ?? null,
+          b.name ?? null, b.nameKana ?? null, b.company ?? null, b.department ?? null,
+          b.title ?? null, b.email ?? null, b.phone ?? null, b.mobile ?? null,
+          b.fax ?? null, b.address ?? null, b.postalCode ?? null, b.website ?? null,
+          b.exchangeDate ? new Date(b.exchangeDate as string) : null,
+          b.exchangeLocation ?? null, b.memo ?? null,
+          tags, b.isFavorite ?? false, now, id,
+        ]
+      )
+      if (result.rows.length === 0) return res.status(404).json({ error: '名刺が見つかりません' })
+      return res.json(deserializeCard(result.rows[0]))
     }
 
     if (req.method === 'DELETE') {
-      const exists = await prisma.card.findUnique({ where: { id } })
-      if (!exists) return res.status(404).json({ error: '名刺が見つかりません' })
-      await prisma.card.delete({ where: { id } })
+      const result = await pool.query('DELETE FROM cards WHERE id = $1 RETURNING id', [id])
+      if (result.rows.length === 0) return res.status(404).json({ error: '名刺が見つかりません' })
       return res.status(204).end()
     }
 

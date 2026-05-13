@@ -1,64 +1,15 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { prisma } from '../lib/prisma'
-import { Prisma } from '@prisma/client'
+import pool from '../lib/db'
+import { v4 as uuidv4 } from 'uuid'
 
 function qs(val: unknown): string {
   return typeof val === 'string' ? val : ''
 }
 
-type CardInput = {
-  tags?: string[] | string
-  exchangeDate?: string | null
-  imageUrl?: string | null
-  thumbnailUrl?: string | null
-  rawOcrText?: string | null
-  name?: string | null
-  nameKana?: string | null
-  company?: string | null
-  department?: string | null
-  title?: string | null
-  email?: string | null
-  phone?: string | null
-  mobile?: string | null
-  fax?: string | null
-  address?: string | null
-  postalCode?: string | null
-  website?: string | null
-  exchangeLocation?: string | null
-  memo?: string | null
-  isFavorite?: boolean
-}
-
-function serializeCard(body: CardInput): Prisma.CardCreateInput {
-  const tagsStr = Array.isArray(body.tags) ? JSON.stringify(body.tags) : (body.tags ?? '[]')
-  return {
-    imageUrl: body.imageUrl ?? undefined,
-    thumbnailUrl: body.thumbnailUrl ?? undefined,
-    rawOcrText: body.rawOcrText ?? undefined,
-    name: body.name ?? undefined,
-    nameKana: body.nameKana ?? undefined,
-    company: body.company ?? undefined,
-    department: body.department ?? undefined,
-    title: body.title ?? undefined,
-    email: body.email ?? undefined,
-    phone: body.phone ?? undefined,
-    mobile: body.mobile ?? undefined,
-    fax: body.fax ?? undefined,
-    address: body.address ?? undefined,
-    postalCode: body.postalCode ?? undefined,
-    website: body.website ?? undefined,
-    exchangeDate: body.exchangeDate ? new Date(body.exchangeDate) : null,
-    exchangeLocation: body.exchangeLocation ?? undefined,
-    memo: body.memo ?? undefined,
-    tags: tagsStr,
-    isFavorite: body.isFavorite,
-  }
-}
-
-function deserializeCard(card: { tags: string; [key: string]: unknown }) {
-  let parsedTags: string[] = []
-  try { parsedTags = JSON.parse(card.tags) as string[] } catch { parsedTags = [] }
-  return { ...card, tags: parsedTags }
+function deserializeCard(row: Record<string, unknown>) {
+  let tags: string[] = []
+  try { tags = JSON.parse(row.tags as string) } catch { tags = [] }
+  return { ...row, tags }
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -74,45 +25,69 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const favoriteOnly = req.query['favorite'] === 'true'
       const page = Math.max(1, parseInt(qs(req.query['page']) || '1', 10))
       const limit = Math.min(100, Math.max(1, parseInt(qs(req.query['limit']) || '20', 10)))
-      const skip = (page - 1) * limit
+      const offset = (page - 1) * limit
 
-      const searchConditions: Prisma.CardWhereInput[] = q
-        ? [
-            { name: { contains: q, mode: 'insensitive' } },
-            { nameKana: { contains: q, mode: 'insensitive' } },
-            { company: { contains: q, mode: 'insensitive' } },
-            { department: { contains: q, mode: 'insensitive' } },
-            { title: { contains: q, mode: 'insensitive' } },
-            { email: { contains: q, mode: 'insensitive' } },
-            { phone: { contains: q } },
-            { mobile: { contains: q } },
-            { address: { contains: q, mode: 'insensitive' } },
-            { memo: { contains: q, mode: 'insensitive' } },
-            { rawOcrText: { contains: q, mode: 'insensitive' } },
-            { tags: { contains: q } },
-          ]
-        : []
+      const conditions: string[] = []
+      const params: unknown[] = []
+      let idx = 1
 
-      const where: Prisma.CardWhereInput = {
-        ...(favoriteOnly ? { isFavorite: true } : {}),
-        ...(tag ? { tags: { contains: tag } } : {}),
-        ...(searchConditions.length > 0 ? { OR: searchConditions } : {}),
+      if (favoriteOnly) {
+        conditions.push(`"isFavorite" = true`)
+      }
+      if (tag) {
+        conditions.push(`tags ILIKE $${idx++}`)
+        params.push(`%${tag}%`)
+      }
+      if (q) {
+        const searchFields = ['name', 'company', 'department', 'title', 'email', 'phone', 'mobile', 'address', 'memo', '"rawOcrText"', 'tags', '"nameKana"']
+        const orClauses = searchFields.map(f => `${f} ILIKE $${idx}`).join(' OR ')
+        conditions.push(`(${orClauses})`)
+        params.push(`%${q}%`)
+        idx++
       }
 
-      const [cards, total] = await Promise.all([
-        prisma.card.findMany({ where, orderBy: { createdAt: 'desc' }, skip, take: limit }),
-        prisma.card.count({ where }),
-      ])
+      const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
+
+      const countResult = await pool.query(`SELECT COUNT(*) FROM cards ${where}`, params)
+      const total = parseInt(countResult.rows[0].count, 10)
+
+      const dataResult = await pool.query(
+        `SELECT * FROM cards ${where} ORDER BY "createdAt" DESC LIMIT $${idx} OFFSET $${idx + 1}`,
+        [...params, limit, offset]
+      )
 
       return res.json({
-        cards: cards.map(deserializeCard),
+        cards: dataResult.rows.map(deserializeCard),
         pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
       })
     }
 
     if (req.method === 'POST') {
-      const card = await prisma.card.create({ data: serializeCard(req.body as CardInput) })
-      return res.status(201).json(deserializeCard(card))
+      const b = req.body as Record<string, unknown>
+      const id = uuidv4()
+      const now = new Date()
+      const tags = Array.isArray(b.tags) ? JSON.stringify(b.tags) : (b.tags ?? '[]')
+
+      const result = await pool.query(
+        `INSERT INTO cards (
+          id, "imageUrl", "thumbnailUrl", "rawOcrText", name, "nameKana", company, department,
+          title, email, phone, mobile, fax, address, "postalCode", website,
+          "exchangeDate", "exchangeLocation", memo, tags, "isFavorite", "createdAt", "updatedAt"
+        ) VALUES (
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23
+        ) RETURNING *`,
+        [
+          id,
+          b.imageUrl ?? null, b.thumbnailUrl ?? null, b.rawOcrText ?? null,
+          b.name ?? null, b.nameKana ?? null, b.company ?? null, b.department ?? null,
+          b.title ?? null, b.email ?? null, b.phone ?? null, b.mobile ?? null,
+          b.fax ?? null, b.address ?? null, b.postalCode ?? null, b.website ?? null,
+          b.exchangeDate ? new Date(b.exchangeDate as string) : null,
+          b.exchangeLocation ?? null, b.memo ?? null,
+          tags, b.isFavorite ?? false, now, now,
+        ]
+      )
+      return res.status(201).json(deserializeCard(result.rows[0]))
     }
 
     res.status(405).end()
